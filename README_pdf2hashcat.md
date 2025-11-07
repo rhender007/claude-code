@@ -1,9 +1,10 @@
-# pdf2hashcat - PDF Password Hash Extractor
+# pdf2hashcat - Automatic PDF Password Cracker
 
-A pure Bash tool to extract password hashes from encrypted PDF files for use with hashcat.
+A pure Bash tool that automatically cracks encrypted PDFs, removes the password, and opens them.
 
 ## Features
 
+- **Fully automatic** - Just run `./pdf2hashcat encrypted.pdf` and it does everything
 - **Pure Bash** - No Python, Perl, or external libraries required
 - **Universal PDF support** - Works with all PDF versions:
   - PDF 1.1-1.3 (Acrobat 2-4) - RC4-40 bit encryption
@@ -11,21 +12,22 @@ A pure Bash tool to extract password hashes from encrypted PDF files for use wit
   - PDF 1.4-1.6 (Acrobat 5-8) - AES-128 bit encryption
   - PDF 1.7 Extension Level 3 (Acrobat 9-X) - AES-256 bit encryption
   - PDF 1.7 Extension Level 8 (Acrobat XI+) - AES-256 bit encryption
-- **Automatic hashcat integration** - Detects encryption type and runs hashcat with correct mode
-- **Auto-finds rockyou.txt** - No need to specify wordlist path, just use `-c` flag
-- **Lightweight** - Uses only standard Unix/Linux tools (grep, sed, awk, xxd)
-- **Hashcat-ready output** - Formats hashes for direct use with hashcat
-- **Two modes** - Extract-only mode or automatic crack mode with `-c` flag
-- **Verbose mode** - Debug output for troubleshooting
+- **Complete workflow** - Extracts hash, cracks password, decrypts PDF, and opens it
+- **Auto-detects rockyou.txt** - No need to specify wordlist path
+- **Auto-selects hashcat mode** - Detects encryption type automatically
+- **Auto-decrypts PDF** - Removes password using qpdf or pdftk
+- **Auto-opens result** - Opens the decrypted PDF automatically
+- **Lightweight** - Uses only standard Unix/Linux tools (grep, awk, xxd)
 - **Pass-through arguments** - Forward additional options to hashcat (workload, optimization, etc.)
 
 ## Requirements
 
 - Bash 4.0 or higher
 - Standard Unix tools: grep, awk, xxd, tr, head, cat
-- hashcat (for crack mode with `-c` flag)
-- rockyou.txt wordlist (typically at `/usr/share/wordlists/rockyou.txt` on Kali/Debian)
-- Available by default on virtually all Linux/Unix systems
+- **hashcat** - For password cracking (`apt install hashcat`)
+- **qpdf** or **pdftk** - For PDF decryption (`apt install qpdf`)
+- **rockyou.txt** wordlist (typically at `/usr/share/wordlists/rockyou.txt` on Kali/Debian)
+- **xdg-open** or **open** - For opening PDFs (usually pre-installed)
 
 ## Installation
 
@@ -35,56 +37,58 @@ chmod +x pdf2hashcat
 
 ## Usage
 
-The script has two modes:
-1. **Extract Mode** (default) - Just extracts and outputs the hash
-2. **Crack Mode** (`-c` flag) - Extracts the hash AND automatically runs hashcat with rockyou.txt
+### Default Mode (Automatic - Recommended)
 
-### Extract Mode (Default)
+**Simply run with the PDF file - that's it!**
 
 ```bash
-# Extract hash to stdout
-./pdf2hashcat encrypted_document.pdf
-
-# Save hash to file
-./pdf2hashcat encrypted_document.pdf > hash.txt
-
-# Verbose mode
-./pdf2hashcat -v encrypted_document.pdf
+# Automatically cracks, decrypts, and opens the PDF
+./pdf2hashcat encrypted.pdf
 ```
 
-### Crack Mode (Automatic Hashcat Integration)
+This will:
+1. Extract the password hash
+2. Crack it with rockyou.txt (auto-detected)
+3. Remove the password from the PDF
+4. Save as `filename_decrypted.pdf`
+5. Automatically open the decrypted PDF
 
-**Simple - just add `-c` flag (uses rockyou.txt automatically):**
+### Additional Options
 
+**Verbose mode (see what's happening):**
 ```bash
-# Crack with rockyou.txt (auto-detected from /usr/share/wordlists/)
-./pdf2hashcat -c encrypted.pdf
-
-# Verbose mode
-./pdf2hashcat -v -c encrypted.pdf
-
-# With additional hashcat options (workload, optimized kernel)
-./pdf2hashcat -c -w 3 -O encrypted.pdf
+./pdf2hashcat -v encrypted.pdf
 ```
 
-**Advanced - specify custom wordlist:**
-
+**Custom wordlist:**
 ```bash
-# With custom wordlist
-./pdf2hashcat -c mywords.txt encrypted.pdf
+./pdf2hashcat -w mywords.txt encrypted.pdf
+```
 
-# With full path to wordlist
-./pdf2hashcat -c /path/to/custom.txt encrypted.pdf
+**Hashcat optimizations:**
+```bash
+# Use workload profile 4 and optimized kernel
+./pdf2hashcat -w 4 -O encrypted.pdf
 ```
 
 **Brute force attacks:**
-
 ```bash
-# Brute force 4 digit PIN
-./pdf2hashcat -c -- -a 3 ?d?d?d?d encrypted.pdf
+# 4-digit PIN
+./pdf2hashcat -- -a 3 ?d?d?d?d encrypted.pdf
 
-# Brute force 6 character all chars
-./pdf2hashcat -c -- -a 3 ?a?a?a?a?a?a encrypted.pdf
+# 6 characters (any type)
+./pdf2hashcat -- -a 3 ?a?a?a?a?a?a encrypted.pdf
+```
+
+### Extract Mode (Hash Only)
+
+**If you just want the hash without cracking:**
+```bash
+# Extract hash to stdout
+./pdf2hashcat -e encrypted.pdf
+
+# Save hash to file
+./pdf2hashcat -e encrypted.pdf > hash.txt
 ```
 
 ### Help
@@ -93,23 +97,32 @@ The script has two modes:
 ./pdf2hashcat -h
 ```
 
-## Using with Hashcat
+## How It Works
 
-### Automatic Mode (Recommended)
-
-The script automatically detects the PDF encryption type and uses the correct hashcat mode with rockyou.txt:
+The script provides a complete automated workflow:
 
 ```bash
-# The script picks the right mode automatically and uses rockyou.txt!
-./pdf2hashcat -c encrypted.pdf
+./pdf2hashcat encrypted.pdf
 ```
 
-The script will:
-1. Detect PDF version and encryption type
-2. Extract the hash
-3. Automatically select the correct hashcat mode (10400, 10500, 10600, or 25400)
-4. Run hashcat with that mode
-5. Display the cracked password if successful
+**Step 1: Extract Hash**
+- Parses PDF structure to find encryption dictionary
+- Extracts encryption parameters (V, R, P, O, U, OE, UE, Perms, ID)
+- Formats hash for hashcat
+
+**Step 2: Crack Password**
+- Auto-detects correct hashcat mode (10400, 10500, 10600, or 25400)
+- Finds rockyou.txt automatically
+- Runs hashcat with optimal settings
+
+**Step 3: Decrypt PDF**
+- Extracts the cracked password
+- Uses qpdf or pdftk to remove password
+- Saves as `filename_decrypted.pdf`
+
+**Step 4: Open PDF**
+- Automatically opens the decrypted PDF with default viewer
+- Uses xdg-open (Linux) or open (macOS)
 
 ### Manual Mode (Traditional Method)
 
@@ -168,31 +181,32 @@ $pdf$4*4*128*-1028*1*16*a1b2c3d4e5f6g7h8*32*u9i8o7p6q5w4e3r2t1y0*48*o0p9i8u7y6t5
 
 ### Complete Workflow Examples
 
-**Example 1: Crack a PDF (simplest - uses rockyou.txt automatically)**
+**Example 1: Crack a PDF (simplest!)**
 ```bash
-./pdf2hashcat -c secret.pdf
+./pdf2hashcat secret.pdf
 ```
+Output: Cracks password, creates `secret_decrypted.pdf`, and opens it automatically
 
 **Example 2: Crack with GPU optimization**
 ```bash
-./pdf2hashcat -c -w 4 -O secret.pdf
+./pdf2hashcat -w 4 -O secret.pdf
 ```
 
 **Example 3: Brute force a 4-digit PIN protected PDF**
 ```bash
-./pdf2hashcat -c -- -a 3 ?d?d?d?d invoice.pdf
+./pdf2hashcat -- -a 3 ?d?d?d?d invoice.pdf
 ```
 
 **Example 4: Extract hash for later cracking**
 ```bash
-./pdf2hashcat document.pdf > hash.txt
+./pdf2hashcat -e document.pdf > hash.txt
 # Later, on a more powerful machine:
 hashcat -m 10600 hash.txt huge_wordlist.txt
 ```
 
 **Example 5: Use custom wordlist**
 ```bash
-./pdf2hashcat -c /path/to/custom.txt report.pdf
+./pdf2hashcat -w /path/to/custom.txt report.pdf
 ```
 
 ## Troubleshooting
@@ -211,12 +225,22 @@ hashcat -m 10600 hash.txt huge_wordlist.txt
 
 ### "hashcat not found in PATH"
 - Install hashcat: `apt install hashcat` or download from https://hashcat.net/hashcat/
-- Or use extract-only mode (without `-c` flag) and run hashcat manually
+- Or use extract-only mode (`-e` flag) and run hashcat manually
+
+### "qpdf or pdftk not found"
+- Install qpdf (recommended): `apt install qpdf` or `brew install qpdf`
+- Or install pdftk: `apt install pdftk`
+- Script will show password so you can manually decrypt
 
 ### Password not found
-- Try a larger wordlist
+- Try a larger wordlist: `./pdf2hashcat -w /path/to/bigger.txt file.pdf`
 - Try different attack modes (brute force, mask attack, combinator)
-- For R=3/4, try both modes 10500 and 25400 if one doesn't work
+- For R=3/4, the script auto-tries mode 10500; manually try 25400 if needed
+
+### PDF doesn't open automatically
+- Script still saves decrypted PDF as `filename_decrypted.pdf`
+- Manually open it from that location
+- Install xdg-open: `apt install xdg-utils` (Linux)
 
 ## Supported Encryption Types
 

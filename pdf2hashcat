@@ -16,7 +16,8 @@
 set -o pipefail
 
 VERBOSE=0
-CRACK_MODE=0
+CRACK_MODE=1  # Crack mode is now default
+EXTRACT_ONLY=0
 WORDLIST=""
 HASHCAT_ARGS=""
 
@@ -70,40 +71,42 @@ find_rockyou() {
 # Usage message
 usage() {
     cat <<EOF
-Usage: $0 [-v|--verbose] [-c [WORDLIST]] [hashcat args...] <pdf_file>
+Usage: $0 [-v|--verbose] [-e|--extract-only] [-w WORDLIST] [hashcat args...] <pdf_file>
 
-Extracts password hash from encrypted PDF and optionally cracks it with hashcat
+Automatically cracks encrypted PDFs, removes password, and opens the decrypted file
 Supports PDF versions 1.1 through 1.7 (including Extension Levels 3 and 8)
+
+Default behavior: Extracts hash, cracks with rockyou.txt, decrypts PDF, and opens it
 
 Options:
   -v, --verbose              Enable verbose output with debugging information
-  -c, --crack [WORDLIST]     Automatically run hashcat (default: rockyou.txt)
-                             If WORDLIST not provided, uses rockyou.txt from default location
+  -e, --extract-only         Extract hash only (don't crack or decrypt)
+  -w, --wordlist WORDLIST    Use custom wordlist (default: rockyou.txt auto-detected)
   -h, --help                 Show this help message
 
 Additional hashcat arguments (e.g., -w 3, -O) can be passed and will be forwarded to hashcat
 
 Examples:
-  # Extract hash only
+  # Crack PDF with rockyou.txt, decrypt, and open (default)
   $0 encrypted.pdf
 
-  # Extract and save to file
-  $0 encrypted.pdf > hash.txt
+  # Verbose mode
+  $0 -v encrypted.pdf
 
-  # Crack with rockyou.txt (auto-detected from default location)
-  $0 -c encrypted.pdf
+  # Extract hash only (no cracking)
+  $0 -e encrypted.pdf
+
+  # Save hash to file
+  $0 -e encrypted.pdf > hash.txt
 
   # Crack with custom wordlist
-  $0 -c mywords.txt encrypted.pdf
+  $0 -w mywords.txt encrypted.pdf
 
-  # Crack with additional hashcat options
-  $0 -c -w 3 -O encrypted.pdf
+  # Crack with hashcat optimizations
+  $0 -O encrypted.pdf
 
-  # Verbose mode with cracking
-  $0 -v -c encrypted.pdf
-
-  # Brute force attack (use -- to separate)
-  $0 -c -- -a 3 ?d?d?d?d encrypted.pdf
+  # Brute force 4-digit PIN
+  $0 -- -a 3 ?d?d?d?d encrypted.pdf
 EOF
     exit 0
 }
@@ -116,20 +119,14 @@ while [[ $# -gt 0 ]]; do
             VERBOSE=1
             shift
             ;;
-        -c|--crack)
-            CRACK_MODE=1
+        -e|--extract-only)
+            EXTRACT_ONLY=1
+            CRACK_MODE=0
             shift
-            # Check if next argument is a wordlist or another flag/PDF
-            if [[ $# -gt 0 && ! "$1" =~ ^- && -f "$1" && "$1" != *.pdf ]]; then
-                WORDLIST="$1"
-                shift
-            elif [[ $# -gt 0 && "$1" == "-" ]]; then
-                WORDLIST="-"
-                shift
-            else
-                # No wordlist specified, will use default rockyou.txt
-                WORDLIST=""
-            fi
+            ;;
+        -w|--wordlist)
+            WORDLIST="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -165,7 +162,7 @@ if [[ $CRACK_MODE -eq 1 && -z "$WORDLIST" ]]; then
     verbose "No wordlist specified, searching for rockyou.txt..."
     WORDLIST=$(find_rockyou)
     if [[ -z "$WORDLIST" ]]; then
-        error "Could not find rockyou.txt in default locations. Please specify a wordlist with -c WORDLIST"
+        error "Could not find rockyou.txt in default locations. Please specify a wordlist with -w WORDLIST"
     fi
     info "Using wordlist: $WORDLIST"
 fi
@@ -520,11 +517,95 @@ if [[ $HASHCAT_EXIT -eq 0 ]]; then
     echo -e "${GREEN}Password cracked successfully!${NC}" >&2
     echo -e "${CYAN}================================================${NC}" >&2
     echo "" >&2
-    echo -e "${GREEN}Recovered password(s):${NC}" >&2
-    hashcat -m $HASHCAT_MODE $HASH_FILE --show 2>/dev/null || true
+
+    # Extract the password from hashcat output
+    CRACKED_OUTPUT=$(hashcat -m $HASHCAT_MODE $HASH_FILE --show 2>/dev/null)
+
+    if [[ -n "$CRACKED_OUTPUT" ]]; then
+        # Extract password (format is hash:password)
+        PASSWORD=$(echo "$CRACKED_OUTPUT" | head -1 | cut -d':' -f2-)
+        echo -e "${GREEN}Recovered password:${NC} $PASSWORD" >&2
+        echo "" >&2
+
+        # Decrypt the PDF
+        echo -e "${CYAN}================================================${NC}" >&2
+        echo -e "${GREEN}Removing password from PDF...${NC}" >&2
+        echo -e "${CYAN}================================================${NC}" >&2
+
+        # Generate output filename
+        BASENAME=$(basename "$PDF_FILE" .pdf)
+        DIRNAME=$(dirname "$PDF_FILE")
+        OUTPUT_PDF="${DIRNAME}/${BASENAME}_decrypted.pdf"
+
+        # Check for qpdf (preferred) or pdftk
+        if command -v qpdf &> /dev/null; then
+            verbose "Using qpdf to decrypt PDF..."
+            if qpdf --password="$PASSWORD" --decrypt "$PDF_FILE" "$OUTPUT_PDF" 2>&1; then
+                echo -e "${GREEN}✓ PDF decrypted successfully!${NC}" >&2
+                echo -e "${GREEN}Saved as: $OUTPUT_PDF${NC}" >&2
+
+                # Open the decrypted PDF
+                echo "" >&2
+                echo -e "${CYAN}Opening decrypted PDF...${NC}" >&2
+
+                if command -v xdg-open &> /dev/null; then
+                    xdg-open "$OUTPUT_PDF" &>/dev/null &
+                    echo -e "${GREEN}✓ PDF opened${NC}" >&2
+                elif command -v open &> /dev/null; then
+                    open "$OUTPUT_PDF" &>/dev/null &
+                    echo -e "${GREEN}✓ PDF opened${NC}" >&2
+                else
+                    echo -e "${YELLOW}Note: Could not auto-open PDF. Please open manually: $OUTPUT_PDF${NC}" >&2
+                fi
+
+                exit 0
+            else
+                echo -e "${RED}✗ Failed to decrypt PDF${NC}" >&2
+                exit 1
+            fi
+        elif command -v pdftk &> /dev/null; then
+            verbose "Using pdftk to decrypt PDF..."
+            if pdftk "$PDF_FILE" input_pw "$PASSWORD" output "$OUTPUT_PDF" 2>&1; then
+                echo -e "${GREEN}✓ PDF decrypted successfully!${NC}" >&2
+                echo -e "${GREEN}Saved as: $OUTPUT_PDF${NC}" >&2
+
+                # Open the decrypted PDF
+                echo "" >&2
+                echo -e "${CYAN}Opening decrypted PDF...${NC}" >&2
+
+                if command -v xdg-open &> /dev/null; then
+                    xdg-open "$OUTPUT_PDF" &>/dev/null &
+                    echo -e "${GREEN}✓ PDF opened${NC}" >&2
+                elif command -v open &> /dev/null; then
+                    open "$OUTPUT_PDF" &>/dev/null &
+                    echo -e "${GREEN}✓ PDF opened${NC}" >&2
+                else
+                    echo -e "${YELLOW}Note: Could not auto-open PDF. Please open manually: $OUTPUT_PDF${NC}" >&2
+                fi
+
+                exit 0
+            else
+                echo -e "${RED}✗ Failed to decrypt PDF${NC}" >&2
+                exit 1
+            fi
+        else
+            echo -e "${YELLOW}Warning: qpdf or pdftk not found. Cannot decrypt PDF automatically.${NC}" >&2
+            echo -e "${YELLOW}Install with: apt install qpdf  OR  apt install pdftk${NC}" >&2
+            echo -e "${GREEN}Password: $PASSWORD${NC}" >&2
+            echo "" >&2
+            echo -e "${YELLOW}You can manually decrypt with:${NC}" >&2
+            echo -e "  qpdf --password='$PASSWORD' --decrypt '$PDF_FILE' '${BASENAME}_decrypted.pdf'" >&2
+            exit 0
+        fi
+    else
+        echo -e "${YELLOW}Could not extract password from hashcat output${NC}" >&2
+        exit 1
+    fi
+
 elif [[ $HASHCAT_EXIT -eq 1 ]]; then
     echo -e "${YELLOW}Hashcat finished but no password found${NC}" >&2
     echo -e "${CYAN}================================================${NC}" >&2
+    echo -e "${YELLOW}Try a larger wordlist or different attack mode${NC}" >&2
 else
     echo -e "${RED}Hashcat exited with error code $HASHCAT_EXIT${NC}" >&2
     echo -e "${CYAN}================================================${NC}" >&2
