@@ -12,6 +12,7 @@ A pure Bash tool to extract password hashes from encrypted PDF files for use wit
   - PDF 1.7 Extension Level 3 (Acrobat 9-X) - AES-256 bit encryption
   - PDF 1.7 Extension Level 8 (Acrobat XI+) - AES-256 bit encryption
 - **Automatic hashcat integration** - Detects encryption type and runs hashcat with correct mode
+- **Auto-finds rockyou.txt** - No need to specify wordlist path, just use `-c` flag
 - **Lightweight** - Uses only standard Unix/Linux tools (grep, sed, awk, xxd)
 - **Hashcat-ready output** - Formats hashes for direct use with hashcat
 - **Two modes** - Extract-only mode or automatic crack mode with `-c` flag
@@ -22,70 +23,85 @@ A pure Bash tool to extract password hashes from encrypted PDF files for use wit
 
 - Bash 4.0 or higher
 - Standard Unix tools: grep, awk, xxd, tr, head, cat
+- hashcat (for crack mode with `-c` flag)
+- rockyou.txt wordlist (typically at `/usr/share/wordlists/rockyou.txt` on Kali/Debian)
 - Available by default on virtually all Linux/Unix systems
 
 ## Installation
 
 ```bash
-chmod +x pdf2hashcat.sh
+chmod +x pdf2hashcat
 ```
 
 ## Usage
 
 The script has two modes:
 1. **Extract Mode** (default) - Just extracts and outputs the hash
-2. **Crack Mode** (`-c` flag) - Extracts the hash AND automatically runs hashcat with the correct mode
+2. **Crack Mode** (`-c` flag) - Extracts the hash AND automatically runs hashcat with rockyou.txt
 
 ### Extract Mode (Default)
 
 ```bash
 # Extract hash to stdout
-./pdf2hashcat.sh encrypted_document.pdf
+./pdf2hashcat encrypted_document.pdf
 
 # Save hash to file
-./pdf2hashcat.sh encrypted_document.pdf > hash.txt
+./pdf2hashcat encrypted_document.pdf > hash.txt
 
 # Verbose mode
-./pdf2hashcat.sh -v encrypted_document.pdf
+./pdf2hashcat -v encrypted_document.pdf
 ```
 
 ### Crack Mode (Automatic Hashcat Integration)
 
-```bash
-# Automatically extract and crack with wordlist
-./pdf2hashcat.sh -c rockyou.txt encrypted_document.pdf
+**Simple - just add `-c` flag (uses rockyou.txt automatically):**
 
-# With full path to wordlist
-./pdf2hashcat.sh -c /usr/share/wordlists/rockyou.txt encrypted.pdf
+```bash
+# Crack with rockyou.txt (auto-detected from /usr/share/wordlists/)
+./pdf2hashcat -c encrypted.pdf
+
+# Verbose mode
+./pdf2hashcat -v -c encrypted.pdf
 
 # With additional hashcat options (workload, optimized kernel)
-./pdf2hashcat.sh -c rockyou.txt -w 3 -O encrypted.pdf
+./pdf2hashcat -c -w 3 -O encrypted.pdf
+```
 
-# Verbose mode + cracking
-./pdf2hashcat.sh -v -c rockyou.txt encrypted.pdf
+**Advanced - specify custom wordlist:**
 
-# Brute force attack (6 character all chars)
-./pdf2hashcat.sh -c - -- -a 3 ?a?a?a?a?a?a encrypted.pdf
+```bash
+# With custom wordlist
+./pdf2hashcat -c mywords.txt encrypted.pdf
 
-# Brute force with mask (4 digit PIN)
-./pdf2hashcat.sh -c - -- -a 3 ?d?d?d?d encrypted.pdf
+# With full path to wordlist
+./pdf2hashcat -c /path/to/custom.txt encrypted.pdf
+```
+
+**Brute force attacks:**
+
+```bash
+# Brute force 4 digit PIN
+./pdf2hashcat -c -- -a 3 ?d?d?d?d encrypted.pdf
+
+# Brute force 6 character all chars
+./pdf2hashcat -c -- -a 3 ?a?a?a?a?a?a encrypted.pdf
 ```
 
 ### Help
 
 ```bash
-./pdf2hashcat.sh -h
+./pdf2hashcat -h
 ```
 
 ## Using with Hashcat
 
 ### Automatic Mode (Recommended)
 
-The script automatically detects the PDF encryption type and uses the correct hashcat mode:
+The script automatically detects the PDF encryption type and uses the correct hashcat mode with rockyou.txt:
 
 ```bash
-# The script picks the right mode automatically!
-./pdf2hashcat.sh -c rockyou.txt encrypted.pdf
+# The script picks the right mode automatically and uses rockyou.txt!
+./pdf2hashcat -c encrypted.pdf
 ```
 
 The script will:
@@ -101,25 +117,25 @@ If you prefer the traditional two-step approach:
 
 #### PDF 1.1-1.3 (RC4-40)
 ```bash
-./pdf2hashcat.sh document.pdf > hash.txt
+./pdf2hashcat document.pdf > hash.txt
 hashcat -m 10400 hash.txt wordlist.txt
 ```
 
 #### PDF 1.4-1.6 (RC4-128)
 ```bash
-./pdf2hashcat.sh document.pdf > hash.txt
+./pdf2hashcat document.pdf > hash.txt
 hashcat -m 10500 hash.txt wordlist.txt
 ```
 
 #### PDF 1.4-1.6 (AES-128)
 ```bash
-./pdf2hashcat.sh document.pdf > hash.txt
+./pdf2hashcat document.pdf > hash.txt
 hashcat -m 25400 hash.txt wordlist.txt
 ```
 
 #### PDF 1.7+ (AES-256)
 ```bash
-./pdf2hashcat.sh document.pdf > hash.txt
+./pdf2hashcat document.pdf > hash.txt
 hashcat -m 10600 hash.txt wordlist.txt
 ```
 
@@ -152,26 +168,31 @@ $pdf$4*4*128*-1028*1*16*a1b2c3d4e5f6g7h8*32*u9i8o7p6q5w4e3r2t1y0*48*o0p9i8u7y6t5
 
 ### Complete Workflow Examples
 
-**Example 1: Crack a PDF with a common wordlist**
+**Example 1: Crack a PDF (simplest - uses rockyou.txt automatically)**
 ```bash
-./pdf2hashcat.sh -c /usr/share/wordlists/rockyou.txt secret.pdf
+./pdf2hashcat -c secret.pdf
 ```
 
-**Example 2: Brute force a 4-digit PIN protected PDF**
+**Example 2: Crack with GPU optimization**
 ```bash
-./pdf2hashcat.sh -c - -- -a 3 ?d?d?d?d invoice.pdf
+./pdf2hashcat -c -w 4 -O secret.pdf
 ```
 
-**Example 3: Extract hash for later cracking**
+**Example 3: Brute force a 4-digit PIN protected PDF**
 ```bash
-./pdf2hashcat.sh document.pdf > hash.txt
+./pdf2hashcat -c -- -a 3 ?d?d?d?d invoice.pdf
+```
+
+**Example 4: Extract hash for later cracking**
+```bash
+./pdf2hashcat document.pdf > hash.txt
 # Later, on a more powerful machine:
 hashcat -m 10600 hash.txt huge_wordlist.txt
 ```
 
-**Example 4: Aggressive cracking with optimization**
+**Example 5: Use custom wordlist**
 ```bash
-./pdf2hashcat.sh -c rockyou.txt -w 4 -O report.pdf
+./pdf2hashcat -c /path/to/custom.txt report.pdf
 ```
 
 ## Troubleshooting

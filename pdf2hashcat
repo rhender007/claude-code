@@ -47,18 +47,39 @@ info() {
     fi
 }
 
+# Function to find rockyou.txt in common locations
+find_rockyou() {
+    local locations=(
+        "/usr/share/wordlists/rockyou.txt"
+        "/usr/share/wordlists/rockyou.txt.gz"
+        "/usr/share/dict/rockyou.txt"
+        "$HOME/wordlists/rockyou.txt"
+        "./rockyou.txt"
+    )
+
+    for loc in "${locations[@]}"; do
+        if [[ -f "$loc" ]]; then
+            echo "$loc"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # Usage message
 usage() {
     cat <<EOF
-Usage: $0 [-v|--verbose] [-c WORDLIST] [hashcat args...] <pdf_file>
+Usage: $0 [-v|--verbose] [-c [WORDLIST]] [hashcat args...] <pdf_file>
 
 Extracts password hash from encrypted PDF and optionally cracks it with hashcat
 Supports PDF versions 1.1 through 1.7 (including Extension Levels 3 and 8)
 
 Options:
-  -v, --verbose         Enable verbose output with debugging information
-  -c, --crack WORDLIST  Automatically run hashcat with the specified wordlist
-  -h, --help            Show this help message
+  -v, --verbose              Enable verbose output with debugging information
+  -c, --crack [WORDLIST]     Automatically run hashcat (default: rockyou.txt)
+                             If WORDLIST not provided, uses rockyou.txt from default location
+  -h, --help                 Show this help message
 
 Additional hashcat arguments (e.g., -w 3, -O) can be passed and will be forwarded to hashcat
 
@@ -69,17 +90,20 @@ Examples:
   # Extract and save to file
   $0 encrypted.pdf > hash.txt
 
-  # Extract and automatically crack with wordlist
-  $0 -c rockyou.txt encrypted.pdf
+  # Crack with rockyou.txt (auto-detected from default location)
+  $0 -c encrypted.pdf
 
-  # Extract and crack with additional hashcat options
-  $0 -c rockyou.txt -w 3 -O encrypted.pdf
+  # Crack with custom wordlist
+  $0 -c mywords.txt encrypted.pdf
+
+  # Crack with additional hashcat options
+  $0 -c -w 3 -O encrypted.pdf
 
   # Verbose mode with cracking
-  $0 -v -c /usr/share/wordlists/rockyou.txt encrypted.pdf
+  $0 -v -c encrypted.pdf
 
-  # Brute force attack (no wordlist needed, use -- to separate)
-  $0 -c - -- -a 3 ?a?a?a?a?a?a encrypted.pdf
+  # Brute force attack (use -- to separate)
+  $0 -c -- -a 3 ?d?d?d?d encrypted.pdf
 EOF
     exit 0
 }
@@ -94,8 +118,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--crack)
             CRACK_MODE=1
-            WORDLIST="$2"
-            shift 2
+            shift
+            # Check if next argument is a wordlist or another flag/PDF
+            if [[ $# -gt 0 && ! "$1" =~ ^- && -f "$1" && "$1" != *.pdf ]]; then
+                WORDLIST="$1"
+                shift
+            elif [[ $# -gt 0 && "$1" == "-" ]]; then
+                WORDLIST="-"
+                shift
+            else
+                # No wordlist specified, will use default rockyou.txt
+                WORDLIST=""
+            fi
             ;;
         -h|--help)
             usage
@@ -125,6 +159,16 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# If crack mode enabled but no wordlist specified, find rockyou.txt
+if [[ $CRACK_MODE -eq 1 && -z "$WORDLIST" ]]; then
+    verbose "No wordlist specified, searching for rockyou.txt..."
+    WORDLIST=$(find_rockyou)
+    if [[ -z "$WORDLIST" ]]; then
+        error "Could not find rockyou.txt in default locations. Please specify a wordlist with -c WORDLIST"
+    fi
+    info "Using wordlist: $WORDLIST"
+fi
 
 # Check if file was provided
 if [[ -z "$PDF_FILE" ]]; then
