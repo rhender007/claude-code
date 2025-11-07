@@ -206,7 +206,7 @@ extract_value() {
 extract_hex_string() {
     local content="$1"
     local key="$2"
-    local pdf_content="$3"
+    local pdf_file="$3"
 
     verbose "Extracting $key..."
 
@@ -218,14 +218,14 @@ extract_hex_string() {
         verbose "Found reference: $obj_num $gen_num R"
 
         # Extract the referenced object - look for hex string
-        local obj_hex=$(echo "$pdf_content" | grep -zoP "$obj_num\s+$gen_num\s+obj\s*<\K[0-9a-fA-F]+" | tr -d '\0' | head -1)
+        local obj_hex=$(grep -zoP "$obj_num\s+$gen_num\s+obj\s*<\K[0-9a-fA-F]+" "$pdf_file" | tr -d '\0' | head -1)
         if [[ -n "$obj_hex" ]]; then
             echo "$obj_hex" | tr 'A-F' 'a-f'
             return
         fi
 
         # Try literal string format in object
-        local obj_data=$(echo "$pdf_content" | grep -zoP "$obj_num\s+$gen_num\s+obj\s*\(\K[^\)]*" | tr -d '\0' | head -1)
+        local obj_data=$(grep -zoP "$obj_num\s+$gen_num\s+obj\s*\(\K[^\)]*" "$pdf_file" | tr -d '\0' | head -1)
         if [[ -n "$obj_data" ]]; then
             echo -n "$obj_data" | bin2hex
             return
@@ -251,12 +251,11 @@ extract_hex_string() {
     echo ""
 }
 
-# Read the entire PDF as binary
-verbose "Reading PDF file..."
-PDF_CONTENT=$(cat "$PDF_FILE")
+# Work directly with the file (don't store binary content in variable)
+verbose "Parsing PDF file..."
 
 # Find Encrypt object reference
-ENCRYPT_REF=$(echo "$PDF_CONTENT" | grep -aoP '/Encrypt\s+\K\d+\s+\d+\s+R' | head -1)
+ENCRYPT_REF=$(grep -aoP '/Encrypt\s+\K\d+\s+\d+\s+R' "$PDF_FILE" | head -1)
 
 if [[ -z "$ENCRYPT_REF" ]]; then
     error "No encryption found in PDF. File may not be password-protected."
@@ -271,11 +270,11 @@ verbose "Encrypt object: $OBJ_NUM $GEN_NUM R"
 
 # Extract the Encrypt dictionary
 # Use grep with null-terminated lines to handle binary data
-ENCRYPT_DICT=$(echo "$PDF_CONTENT" | grep -zoP "$OBJ_NUM\s+$GEN_NUM\s+obj\s*<<\K.*?(?=>>)" | tr -d '\0' | head -1)
+ENCRYPT_DICT=$(grep -zoP "$OBJ_NUM\s+$GEN_NUM\s+obj\s*<<\K.*?(?=>>)" "$PDF_FILE" | tr -d '\0' | head -1)
 
 if [[ -z "$ENCRYPT_DICT" ]]; then
     # Fallback: try to find /Encrypt dictionary directly
-    ENCRYPT_DICT=$(echo "$PDF_CONTENT" | grep -zoP '/Encrypt\s*<<\K.*?(?=>>)' | tr -d '\0' | head -1)
+    ENCRYPT_DICT=$(grep -zoP '/Encrypt\s*<<\K.*?(?=>>)' "$PDF_FILE" | tr -d '\0' | head -1)
 fi
 
 if [[ -z "$ENCRYPT_DICT" ]]; then
@@ -332,7 +331,7 @@ verbose "EncryptMetadata: $EM"
 
 # Extract O string (owner password)
 verbose "Extracting O (owner) string..."
-O=$(extract_hex_string "$ENCRYPT_DICT" "O" "$PDF_CONTENT")
+O=$(extract_hex_string "$ENCRYPT_DICT" "O" "$PDF_FILE")
 if [[ -z "$O" ]]; then
     error "Could not extract O (owner) string"
 fi
@@ -341,7 +340,7 @@ info "O string: ${O:0:32}... (length: $O_LEN bytes)"
 
 # Extract U string (user password)
 verbose "Extracting U (user) string..."
-U=$(extract_hex_string "$ENCRYPT_DICT" "U" "$PDF_CONTENT")
+U=$(extract_hex_string "$ENCRYPT_DICT" "U" "$PDF_FILE")
 if [[ -z "$U" ]]; then
     error "Could not extract U (user) string"
 fi
@@ -355,9 +354,9 @@ PERMS=""
 if [[ $R -ge 5 ]]; then
     verbose "Extracting OE, UE, Perms for PDF 1.7 Extension Level 3+..."
 
-    OE=$(extract_hex_string "$ENCRYPT_DICT" "OE" "$PDF_CONTENT")
-    UE=$(extract_hex_string "$ENCRYPT_DICT" "UE" "$PDF_CONTENT")
-    PERMS=$(extract_hex_string "$ENCRYPT_DICT" "Perms" "$PDF_CONTENT")
+    OE=$(extract_hex_string "$ENCRYPT_DICT" "OE" "$PDF_FILE")
+    UE=$(extract_hex_string "$ENCRYPT_DICT" "UE" "$PDF_FILE")
+    PERMS=$(extract_hex_string "$ENCRYPT_DICT" "Perms" "$PDF_FILE")
 
     if [[ -n "$OE" ]]; then
         OE_LEN=$((${#OE} / 2))
@@ -383,11 +382,11 @@ fi
 
 # Extract ID from trailer
 verbose "Extracting document ID..."
-ID=$(echo "$PDF_CONTENT" | grep -zoP '/ID\s*\[\s*<\K[0-9a-fA-F]+' | tr -d '\0' | head -1 | tr 'A-F' 'a-f')
+ID=$(grep -zoP '/ID\s*\[\s*<\K[0-9a-fA-F]+' "$PDF_FILE" | tr -d '\0' | head -1 | tr 'A-F' 'a-f')
 
 if [[ -z "$ID" ]]; then
     # Try literal string format
-    ID_LIT=$(echo "$PDF_CONTENT" | grep -zoP '/ID\s*\[\s*\(\K[^\)]+' | tr -d '\0' | head -1)
+    ID_LIT=$(grep -zoP '/ID\s*\[\s*\(\K[^\)]+' "$PDF_FILE" | tr -d '\0' | head -1)
     if [[ -n "$ID_LIT" ]]; then
         ID=$(echo -n "$ID_LIT" | bin2hex)
     fi
