@@ -11,9 +11,12 @@ A pure Bash tool to extract password hashes from encrypted PDF files for use wit
   - PDF 1.4-1.6 (Acrobat 5-8) - AES-128 bit encryption
   - PDF 1.7 Extension Level 3 (Acrobat 9-X) - AES-256 bit encryption
   - PDF 1.7 Extension Level 8 (Acrobat XI+) - AES-256 bit encryption
+- **Automatic hashcat integration** - Detects encryption type and runs hashcat with correct mode
 - **Lightweight** - Uses only standard Unix/Linux tools (grep, sed, awk, xxd)
 - **Hashcat-ready output** - Formats hashes for direct use with hashcat
+- **Two modes** - Extract-only mode or automatic crack mode with `-c` flag
 - **Verbose mode** - Debug output for troubleshooting
+- **Pass-through arguments** - Forward additional options to hashcat (workload, optimization, etc.)
 
 ## Requirements
 
@@ -29,22 +32,43 @@ chmod +x pdf2hashcat.sh
 
 ## Usage
 
-### Basic Usage
+The script has two modes:
+1. **Extract Mode** (default) - Just extracts and outputs the hash
+2. **Crack Mode** (`-c` flag) - Extracts the hash AND automatically runs hashcat with the correct mode
+
+### Extract Mode (Default)
 
 ```bash
+# Extract hash to stdout
 ./pdf2hashcat.sh encrypted_document.pdf
-```
 
-### Verbose Mode
+# Save hash to file
+./pdf2hashcat.sh encrypted_document.pdf > hash.txt
 
-```bash
+# Verbose mode
 ./pdf2hashcat.sh -v encrypted_document.pdf
 ```
 
-### Save Hash to File
+### Crack Mode (Automatic Hashcat Integration)
 
 ```bash
-./pdf2hashcat.sh encrypted_document.pdf > hash.txt
+# Automatically extract and crack with wordlist
+./pdf2hashcat.sh -c rockyou.txt encrypted_document.pdf
+
+# With full path to wordlist
+./pdf2hashcat.sh -c /usr/share/wordlists/rockyou.txt encrypted.pdf
+
+# With additional hashcat options (workload, optimized kernel)
+./pdf2hashcat.sh -c rockyou.txt -w 3 -O encrypted.pdf
+
+# Verbose mode + cracking
+./pdf2hashcat.sh -v -c rockyou.txt encrypted.pdf
+
+# Brute force attack (6 character all chars)
+./pdf2hashcat.sh -c - -- -a 3 ?a?a?a?a?a?a encrypted.pdf
+
+# Brute force with mask (4 digit PIN)
+./pdf2hashcat.sh -c - -- -a 3 ?d?d?d?d encrypted.pdf
 ```
 
 ### Help
@@ -55,27 +79,45 @@ chmod +x pdf2hashcat.sh
 
 ## Using with Hashcat
 
-After extracting the hash, use it with hashcat:
+### Automatic Mode (Recommended)
 
-### PDF 1.1-1.3 (RC4-40)
+The script automatically detects the PDF encryption type and uses the correct hashcat mode:
+
+```bash
+# The script picks the right mode automatically!
+./pdf2hashcat.sh -c rockyou.txt encrypted.pdf
+```
+
+The script will:
+1. Detect PDF version and encryption type
+2. Extract the hash
+3. Automatically select the correct hashcat mode (10400, 10500, 10600, or 25400)
+4. Run hashcat with that mode
+5. Display the cracked password if successful
+
+### Manual Mode (Traditional Method)
+
+If you prefer the traditional two-step approach:
+
+#### PDF 1.1-1.3 (RC4-40)
 ```bash
 ./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10400 hash.txt wordlist.txt
 ```
 
-### PDF 1.4-1.6 (RC4-128)
+#### PDF 1.4-1.6 (RC4-128)
 ```bash
 ./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10500 hash.txt wordlist.txt
 ```
 
-### PDF 1.4-1.6 (AES-128)
+#### PDF 1.4-1.6 (AES-128)
 ```bash
 ./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 25400 hash.txt wordlist.txt
 ```
 
-### PDF 1.7+ (AES-256)
+#### PDF 1.7+ (AES-256)
 ```bash
 ./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10600 hash.txt wordlist.txt
@@ -106,6 +148,32 @@ The script:
 $pdf$4*4*128*-1028*1*16*a1b2c3d4e5f6g7h8*32*u9i8o7p6q5w4e3r2t1y0*48*o0p9i8u7y6t5r4e3w2q1
 ```
 
+## Quick Start Examples
+
+### Complete Workflow Examples
+
+**Example 1: Crack a PDF with a common wordlist**
+```bash
+./pdf2hashcat.sh -c /usr/share/wordlists/rockyou.txt secret.pdf
+```
+
+**Example 2: Brute force a 4-digit PIN protected PDF**
+```bash
+./pdf2hashcat.sh -c - -- -a 3 ?d?d?d?d invoice.pdf
+```
+
+**Example 3: Extract hash for later cracking**
+```bash
+./pdf2hashcat.sh document.pdf > hash.txt
+# Later, on a more powerful machine:
+hashcat -m 10600 hash.txt huge_wordlist.txt
+```
+
+**Example 4: Aggressive cracking with optimization**
+```bash
+./pdf2hashcat.sh -c rockyou.txt -w 4 -O report.pdf
+```
+
 ## Troubleshooting
 
 ### "Not a valid PDF file"
@@ -119,6 +187,15 @@ $pdf$4*4*128*-1028*1*16*a1b2c3d4e5f6g7h8*32*u9i8o7p6q5w4e3r2t1y0*48*o0p9i8u7y6t5
 ### "Could not extract encryption parameters"
 - The PDF structure may be malformed
 - Try the `-v` flag to see what parameters were found
+
+### "hashcat not found in PATH"
+- Install hashcat: `apt install hashcat` or download from https://hashcat.net/hashcat/
+- Or use extract-only mode (without `-c` flag) and run hashcat manually
+
+### Password not found
+- Try a larger wordlist
+- Try different attack modes (brute force, mask attack, combinator)
+- For R=3/4, try both modes 10500 and 25400 if one doesn't work
 
 ## Supported Encryption Types
 

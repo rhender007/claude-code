@@ -16,11 +16,15 @@
 set -o pipefail
 
 VERBOSE=0
+CRACK_MODE=0
+WORDLIST=""
+HASHCAT_ARGS=""
 
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print error messages
@@ -46,19 +50,36 @@ info() {
 # Usage message
 usage() {
     cat <<EOF
-Usage: $0 [-v|--verbose] <pdf_file>
+Usage: $0 [-v|--verbose] [-c WORDLIST] [hashcat args...] <pdf_file>
 
-Extracts password hash from encrypted PDF for use with hashcat
+Extracts password hash from encrypted PDF and optionally cracks it with hashcat
 Supports PDF versions 1.1 through 1.7 (including Extension Levels 3 and 8)
 
 Options:
-  -v, --verbose    Enable verbose output with debugging information
-  -h, --help       Show this help message
+  -v, --verbose         Enable verbose output with debugging information
+  -c, --crack WORDLIST  Automatically run hashcat with the specified wordlist
+  -h, --help            Show this help message
+
+Additional hashcat arguments (e.g., -w 3, -O) can be passed and will be forwarded to hashcat
 
 Examples:
+  # Extract hash only
   $0 encrypted.pdf
-  $0 -v encrypted.pdf > hash.txt
-  hashcat -m 10600 hash.txt wordlist.txt
+
+  # Extract and save to file
+  $0 encrypted.pdf > hash.txt
+
+  # Extract and automatically crack with wordlist
+  $0 -c rockyou.txt encrypted.pdf
+
+  # Extract and crack with additional hashcat options
+  $0 -c rockyou.txt -w 3 -O encrypted.pdf
+
+  # Verbose mode with cracking
+  $0 -v -c /usr/share/wordlists/rockyou.txt encrypted.pdf
+
+  # Brute force attack (no wordlist needed, use -- to separate)
+  $0 -c - -- -a 3 ?a?a?a?a?a?a encrypted.pdf
 EOF
     exit 0
 }
@@ -71,8 +92,32 @@ while [[ $# -gt 0 ]]; do
             VERBOSE=1
             shift
             ;;
+        -c|--crack)
+            CRACK_MODE=1
+            WORDLIST="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
+            ;;
+        --)
+            # Everything after -- goes to hashcat
+            shift
+            while [[ $# -gt 1 ]]; do
+                HASHCAT_ARGS="$HASHCAT_ARGS $1"
+                shift
+            done
+            PDF_FILE="$1"
+            shift
+            ;;
+        -*)
+            # Unknown option - pass to hashcat if in crack mode
+            if [[ $CRACK_MODE -eq 1 ]]; then
+                HASHCAT_ARGS="$HASHCAT_ARGS $1"
+                shift
+            else
+                error "Unknown option: $1. Use -h for help."
+            fi
             ;;
         *)
             PDF_FILE="$1"
@@ -321,12 +366,15 @@ fi
 # Format hash for hashcat based on revision
 verbose "Formatting hash for hashcat..."
 
+HASHCAT_MODE=""
+
 if [[ $R -ge 5 ]]; then
     # PDF 1.7 Extension Level 3+ (R=5) or Level 8 (R=6) - AES-256
     # Mode: 10600
     # Format: $pdf$V*R*keylen*P*EncryptMetadata*id_len*id*u_len*u*o_len*o*oe_len*oe*ue_len*ue*perms_len*perms
 
     HASH="\$pdf\$$V*$R*$LENGTH*$P*$EM*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O*$OE_LEN*$OE*$UE_LEN*$UE*$PERMS_LEN*$PERMS"
+    HASHCAT_MODE="10600"
     info "Hashcat mode: 10600 (PDF 1.7+ AES-256)"
 
 elif [[ $R -eq 3 || $R -eq 4 ]]; then
@@ -339,7 +387,11 @@ elif [[ $R -eq 3 || $R -eq 4 ]]; then
     fi
 
     HASH="\$pdf\$$V*$R*$LENGTH*$P*$EM*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O"
+    HASHCAT_MODE="10500"
     info "Hashcat mode: 10500 (RC4-128) or 25400 (AES-128)"
+    if [[ $CRACK_MODE -eq 1 ]]; then
+        info "Note: Trying mode 10500 first. If it fails, try mode 25400 for AES-128"
+    fi
 
 elif [[ $R -eq 2 ]]; then
     # PDF 1.1-1.3 (Acrobat 2-4) - RC4-40
@@ -351,15 +403,87 @@ elif [[ $R -eq 2 ]]; then
     fi
 
     HASH="\$pdf\$$V*$R*$LENGTH*$P*1*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O"
+    HASHCAT_MODE="10400"
     info "Hashcat mode: 10400 (RC4-40)"
 
 else
     error "Unsupported encryption revision R=$R"
 fi
 
-# Output the hash
-echo -e "$HASH"
+# If not in crack mode, just output the hash
+if [[ $CRACK_MODE -eq 0 ]]; then
+    echo -e "$HASH"
+    verbose "Hash extraction complete!"
+    exit 0
+fi
 
-verbose "Hash extraction complete!"
+# Crack mode - run hashcat
+verbose "Hash extraction complete! Starting hashcat..."
 
-exit 0
+# Check if hashcat is available
+if ! command -v hashcat &> /dev/null; then
+    error "hashcat not found in PATH. Please install hashcat or run without -c flag."
+fi
+
+# Validate wordlist
+if [[ "$WORDLIST" != "-" ]]; then
+    if [[ ! -f "$WORDLIST" ]]; then
+        error "Wordlist file '$WORDLIST' not found"
+    fi
+    if [[ ! -r "$WORDLIST" ]]; then
+        error "Wordlist file '$WORDLIST' is not readable"
+    fi
+fi
+
+# Create temporary hash file
+HASH_FILE=$(mktemp /tmp/pdf2hashcat.XXXXXX)
+trap "rm -f $HASH_FILE" EXIT
+
+echo -e "$HASH" > "$HASH_FILE"
+
+echo -e "${CYAN}================================================${NC}" >&2
+echo -e "${GREEN}Starting hashcat with mode $HASHCAT_MODE${NC}" >&2
+echo -e "${CYAN}================================================${NC}" >&2
+echo "" >&2
+
+# Build hashcat command
+HASHCAT_CMD="hashcat -m $HASHCAT_MODE"
+
+# Add additional arguments
+if [[ -n "$HASHCAT_ARGS" ]]; then
+    HASHCAT_CMD="$HASHCAT_CMD $HASHCAT_ARGS"
+fi
+
+# Add hash file
+HASHCAT_CMD="$HASHCAT_CMD $HASH_FILE"
+
+# Add wordlist if not using attack mode (-)
+if [[ "$WORDLIST" != "-" ]]; then
+    HASHCAT_CMD="$HASHCAT_CMD $WORDLIST"
+fi
+
+verbose "Running: $HASHCAT_CMD"
+
+# Run hashcat
+eval $HASHCAT_CMD
+
+HASHCAT_EXIT=$?
+
+echo "" >&2
+echo -e "${CYAN}================================================${NC}" >&2
+
+if [[ $HASHCAT_EXIT -eq 0 ]]; then
+    echo -e "${GREEN}Password cracked successfully!${NC}" >&2
+    echo -e "${CYAN}================================================${NC}" >&2
+    echo "" >&2
+    echo -e "${GREEN}Recovered password(s):${NC}" >&2
+    hashcat -m $HASHCAT_MODE $HASH_FILE --show 2>/dev/null || true
+elif [[ $HASHCAT_EXIT -eq 1 ]]; then
+    echo -e "${YELLOW}Hashcat finished but no password found${NC}" >&2
+    echo -e "${CYAN}================================================${NC}" >&2
+else
+    echo -e "${RED}Hashcat exited with error code $HASHCAT_EXIT${NC}" >&2
+    echo -e "${CYAN}================================================${NC}" >&2
+fi
+
+exit $HASHCAT_EXIT
