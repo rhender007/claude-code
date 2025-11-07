@@ -1,28 +1,30 @@
 # pdf2hashcat - PDF Password Hash Extractor
 
-A Perl-based tool to extract password hashes from encrypted PDF files for use with hashcat.
+A pure Bash tool to extract password hashes from encrypted PDF files for use with hashcat.
 
 ## Features
 
-- **No Python required** - Pure Perl implementation
+- **Pure Bash** - No Python, Perl, or external libraries required
 - **Universal PDF support** - Works with all PDF versions:
   - PDF 1.1-1.3 (Acrobat 2-4) - RC4-40 bit encryption
   - PDF 1.4-1.6 (Acrobat 5-8) - RC4-128 bit encryption
   - PDF 1.4-1.6 (Acrobat 5-8) - AES-128 bit encryption
   - PDF 1.7 Extension Level 3 (Acrobat 9-X) - AES-256 bit encryption
   - PDF 1.7 Extension Level 8 (Acrobat XI+) - AES-256 bit encryption
-- **Standalone** - No external dependencies beyond core Perl
+- **Lightweight** - Uses only standard Unix/Linux tools (grep, sed, awk, xxd)
 - **Hashcat-ready output** - Formats hashes for direct use with hashcat
+- **Verbose mode** - Debug output for troubleshooting
 
 ## Requirements
 
-- Perl 5.8 or higher (standard on most Unix/Linux systems)
-- No additional CPAN modules required
+- Bash 4.0 or higher
+- Standard Unix tools: grep, awk, xxd, tr, head, cat
+- Available by default on virtually all Linux/Unix systems
 
 ## Installation
 
 ```bash
-chmod +x pdf2hashcat.pl
+chmod +x pdf2hashcat.sh
 ```
 
 ## Usage
@@ -30,19 +32,25 @@ chmod +x pdf2hashcat.pl
 ### Basic Usage
 
 ```bash
-./pdf2hashcat.pl encrypted_document.pdf
+./pdf2hashcat.sh encrypted_document.pdf
 ```
 
 ### Verbose Mode
 
 ```bash
-./pdf2hashcat.pl -v encrypted_document.pdf
+./pdf2hashcat.sh -v encrypted_document.pdf
 ```
 
 ### Save Hash to File
 
 ```bash
-./pdf2hashcat.pl encrypted_document.pdf > hash.txt
+./pdf2hashcat.sh encrypted_document.pdf > hash.txt
+```
+
+### Help
+
+```bash
+./pdf2hashcat.sh -h
 ```
 
 ## Using with Hashcat
@@ -51,25 +59,25 @@ After extracting the hash, use it with hashcat:
 
 ### PDF 1.1-1.3 (RC4-40)
 ```bash
-./pdf2hashcat.pl document.pdf > hash.txt
+./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10400 hash.txt wordlist.txt
 ```
 
 ### PDF 1.4-1.6 (RC4-128)
 ```bash
-./pdf2hashcat.pl document.pdf > hash.txt
+./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10500 hash.txt wordlist.txt
 ```
 
 ### PDF 1.4-1.6 (AES-128)
 ```bash
-./pdf2hashcat.pl document.pdf > hash.txt
+./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 25400 hash.txt wordlist.txt
 ```
 
 ### PDF 1.7+ (AES-256)
 ```bash
-./pdf2hashcat.pl document.pdf > hash.txt
+./pdf2hashcat.sh document.pdf > hash.txt
 hashcat -m 10600 hash.txt wordlist.txt
 ```
 
@@ -158,13 +166,15 @@ $pdf$V*R*keylen*P*EncryptMetadata*id_len*id*u_len*u*o_len*o[*oe_len*oe*ue_len*ue
 
 Where bracketed fields are only present for PDF 1.7+ (R5/6).
 
-## Why Perl?
+## Why Bash?
 
 - Available by default on virtually all Unix/Linux systems
-- Excellent binary and text processing capabilities
-- No external dependencies needed
+- No additional languages required (Python, Perl, Ruby, etc.)
+- Uses only standard Unix tools (grep, awk, xxd, tr)
 - Lightweight and fast
+- Easy to read and modify
 - Cross-platform compatible
+- Perfect for quick security assessments
 
 ## Contributing
 

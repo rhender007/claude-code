@@ -1,0 +1,365 @@
+#!/bin/bash
+#
+# pdf2hashcat.sh - Extract password hashes from encrypted PDF files
+# Supports all PDF versions (1.1-1.7, including Extension Levels 3 and 8)
+# For use with hashcat
+#
+# Usage: bash pdf2hashcat.sh [-v] <pdf_file>
+#
+# Hashcat modes:
+#   10400 - PDF 1.1-1.3 (Acrobat 2-4) RC4-40
+#   10500 - PDF 1.4-1.6 (Acrobat 5-8) RC4-128
+#   10600 - PDF 1.7 Level 3+ (Acrobat 9+) AES-256
+#   10700 - PDF 1.4-1.6 (Acrobat 5-8) RC4-128 (user password)
+#   25400 - PDF 1.4-1.6 (Acrobat 5-8) AES-128
+
+set -o pipefail
+
+VERBOSE=0
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print error messages
+error() {
+    echo -e "${RED}Error:${NC} $1" >&2
+    exit 1
+}
+
+# Function to print verbose messages
+verbose() {
+    if [[ $VERBOSE -eq 1 ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $1" >&2
+    fi
+}
+
+# Function to print info messages
+info() {
+    if [[ $VERBOSE -eq 1 ]]; then
+        echo -e "${GREEN}[INFO]${NC} $1" >&2
+    fi
+}
+
+# Usage message
+usage() {
+    cat <<EOF
+Usage: $0 [-v|--verbose] <pdf_file>
+
+Extracts password hash from encrypted PDF for use with hashcat
+Supports PDF versions 1.1 through 1.7 (including Extension Levels 3 and 8)
+
+Options:
+  -v, --verbose    Enable verbose output with debugging information
+  -h, --help       Show this help message
+
+Examples:
+  $0 encrypted.pdf
+  $0 -v encrypted.pdf > hash.txt
+  hashcat -m 10600 hash.txt wordlist.txt
+EOF
+    exit 0
+}
+
+# Parse command line arguments
+PDF_FILE=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            PDF_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Check if file was provided
+if [[ -z "$PDF_FILE" ]]; then
+    error "No PDF file specified. Use -h for help."
+fi
+
+# Check if file exists
+if [[ ! -f "$PDF_FILE" ]]; then
+    error "File '$PDF_FILE' not found"
+fi
+
+# Check if file is readable
+if [[ ! -r "$PDF_FILE" ]]; then
+    error "File '$PDF_FILE' is not readable"
+fi
+
+# Verify it's a PDF file
+PDF_VERSION=$(head -c 20 "$PDF_FILE" | grep -ao '%PDF-[0-9]\.[0-9]' | head -1 | cut -d'-' -f2)
+if [[ -z "$PDF_VERSION" ]]; then
+    error "Not a valid PDF file"
+fi
+
+info "PDF Version: $PDF_VERSION"
+
+# Function to convert binary string to hex
+bin2hex() {
+    xxd -p -c 256 | tr -d '\n'
+}
+
+# Function to extract value from PDF dictionary
+extract_value() {
+    local content="$1"
+    local key="$2"
+    echo "$content" | grep -oP "/$key\s+\K[^\s/\[\]<>]+" | head -1
+}
+
+# Function to extract hex string from PDF (handles both <hex> and (literal) formats)
+extract_hex_string() {
+    local content="$1"
+    local key="$2"
+    local pdf_content="$3"
+
+    verbose "Extracting $key..."
+
+    # Check if it's an object reference (e.g., /U 10 0 R)
+    local ref=$(echo "$content" | grep -oP "/$key\s+\K(\d+)\s+(\d+)\s+R" | head -1)
+    if [[ -n "$ref" ]]; then
+        local obj_num=$(echo "$ref" | awk '{print $1}')
+        local gen_num=$(echo "$ref" | awk '{print $2}')
+        verbose "Found reference: $obj_num $gen_num R"
+
+        # Extract the referenced object - look for hex string
+        local obj_hex=$(echo "$pdf_content" | grep -zoP "$obj_num\s+$gen_num\s+obj\s*<\K[0-9a-fA-F]+" | tr -d '\0' | head -1)
+        if [[ -n "$obj_hex" ]]; then
+            echo "$obj_hex" | tr 'A-F' 'a-f'
+            return
+        fi
+
+        # Try literal string format in object
+        local obj_data=$(echo "$pdf_content" | grep -zoP "$obj_num\s+$gen_num\s+obj\s*\(\K[^\)]*" | tr -d '\0' | head -1)
+        if [[ -n "$obj_data" ]]; then
+            echo -n "$obj_data" | bin2hex
+            return
+        fi
+    fi
+
+    # Try direct hex string format <...>
+    local hex_str=$(echo "$content" | grep -oP "/$key\s*<\K[0-9a-fA-F]+" | head -1)
+    if [[ -n "$hex_str" ]]; then
+        echo "$hex_str" | tr 'A-F' 'a-f'
+        return
+    fi
+
+    # Try literal string format (...)
+    # This is more complex due to escape sequences
+    local lit_str=$(echo "$content" | grep -oP "/$key\s*\(\K[^\)]+" | head -1)
+    if [[ -n "$lit_str" ]]; then
+        # Convert to hex (simplified - doesn't handle all escape sequences)
+        echo -n "$lit_str" | bin2hex
+        return
+    fi
+
+    echo ""
+}
+
+# Read the entire PDF as binary
+verbose "Reading PDF file..."
+PDF_CONTENT=$(cat "$PDF_FILE")
+
+# Find Encrypt object reference
+ENCRYPT_REF=$(echo "$PDF_CONTENT" | grep -aoP '/Encrypt\s+\K\d+\s+\d+\s+R' | head -1)
+
+if [[ -z "$ENCRYPT_REF" ]]; then
+    error "No encryption found in PDF. File may not be password-protected."
+fi
+
+info "Found Encrypt reference: $ENCRYPT_REF"
+
+OBJ_NUM=$(echo "$ENCRYPT_REF" | awk '{print $1}')
+GEN_NUM=$(echo "$ENCRYPT_REF" | awk '{print $2}')
+
+verbose "Encrypt object: $OBJ_NUM $GEN_NUM R"
+
+# Extract the Encrypt dictionary
+# Use grep with null-terminated lines to handle binary data
+ENCRYPT_DICT=$(echo "$PDF_CONTENT" | grep -zoP "$OBJ_NUM\s+$GEN_NUM\s+obj\s*<<\K.*?(?=>>)" | tr -d '\0' | head -1)
+
+if [[ -z "$ENCRYPT_DICT" ]]; then
+    # Fallback: try to find /Encrypt dictionary directly
+    ENCRYPT_DICT=$(echo "$PDF_CONTENT" | grep -zoP '/Encrypt\s*<<\K.*?(?=>>)' | tr -d '\0' | head -1)
+fi
+
+if [[ -z "$ENCRYPT_DICT" ]]; then
+    error "Could not extract Encrypt dictionary"
+fi
+
+verbose "Found Encrypt dictionary"
+
+# Extract V (algorithm version)
+V=$(extract_value "$ENCRYPT_DICT" "V")
+if [[ -z "$V" ]]; then
+    error "Could not extract encryption version (V)"
+fi
+info "V (Version): $V"
+
+# Extract R (revision)
+R=$(extract_value "$ENCRYPT_DICT" "R")
+if [[ -z "$R" ]]; then
+    error "Could not extract encryption revision (R)"
+fi
+info "R (Revision): $R"
+
+# Extract P (permissions)
+P=$(extract_value "$ENCRYPT_DICT" "P")
+if [[ -z "$P" ]]; then
+    P="-1"
+fi
+# Handle negative numbers
+if [[ "$P" =~ ^-?[0-9]+$ ]]; then
+    verbose "P (Permissions): $P"
+else
+    P="-1"
+fi
+
+# Extract Length (key length)
+LENGTH=$(extract_value "$ENCRYPT_DICT" "Length")
+if [[ -z "$LENGTH" ]]; then
+    if [[ $V -ge 2 ]]; then
+        LENGTH=128
+    else
+        LENGTH=40
+    fi
+fi
+info "Length: $LENGTH bits"
+
+# Extract EncryptMetadata
+ENCRYPT_METADATA=$(extract_value "$ENCRYPT_DICT" "EncryptMetadata")
+if [[ "$ENCRYPT_METADATA" == "false" ]]; then
+    EM=0
+else
+    EM=1
+fi
+verbose "EncryptMetadata: $EM"
+
+# Extract O string (owner password)
+verbose "Extracting O (owner) string..."
+O=$(extract_hex_string "$ENCRYPT_DICT" "O" "$PDF_CONTENT")
+if [[ -z "$O" ]]; then
+    error "Could not extract O (owner) string"
+fi
+O_LEN=$((${#O} / 2))
+info "O string: ${O:0:32}... (length: $O_LEN bytes)"
+
+# Extract U string (user password)
+verbose "Extracting U (user) string..."
+U=$(extract_hex_string "$ENCRYPT_DICT" "U" "$PDF_CONTENT")
+if [[ -z "$U" ]]; then
+    error "Could not extract U (user) string"
+fi
+U_LEN=$((${#U} / 2))
+info "U string: ${U:0:32}... (length: $U_LEN bytes)"
+
+# Extract OE, UE, Perms for PDF 1.7 Extension Level 3+ (R >= 5)
+OE=""
+UE=""
+PERMS=""
+if [[ $R -ge 5 ]]; then
+    verbose "Extracting OE, UE, Perms for PDF 1.7 Extension Level 3+..."
+
+    OE=$(extract_hex_string "$ENCRYPT_DICT" "OE" "$PDF_CONTENT")
+    UE=$(extract_hex_string "$ENCRYPT_DICT" "UE" "$PDF_CONTENT")
+    PERMS=$(extract_hex_string "$ENCRYPT_DICT" "Perms" "$PDF_CONTENT")
+
+    if [[ -n "$OE" ]]; then
+        OE_LEN=$((${#OE} / 2))
+        info "OE string: ${OE:0:32}... (length: $OE_LEN bytes)"
+    else
+        OE_LEN=0
+    fi
+
+    if [[ -n "$UE" ]]; then
+        UE_LEN=$((${#UE} / 2))
+        info "UE string: ${UE:0:32}... (length: $UE_LEN bytes)"
+    else
+        UE_LEN=0
+    fi
+
+    if [[ -n "$PERMS" ]]; then
+        PERMS_LEN=$((${#PERMS} / 2))
+        info "Perms string: ${PERMS:0:32}... (length: $PERMS_LEN bytes)"
+    else
+        PERMS_LEN=0
+    fi
+fi
+
+# Extract ID from trailer
+verbose "Extracting document ID..."
+ID=$(echo "$PDF_CONTENT" | grep -zoP '/ID\s*\[\s*<\K[0-9a-fA-F]+' | tr -d '\0' | head -1 | tr 'A-F' 'a-f')
+
+if [[ -z "$ID" ]]; then
+    # Try literal string format
+    ID_LIT=$(echo "$PDF_CONTENT" | grep -zoP '/ID\s*\[\s*\(\K[^\)]+' | tr -d '\0' | head -1)
+    if [[ -n "$ID_LIT" ]]; then
+        ID=$(echo -n "$ID_LIT" | bin2hex)
+    fi
+fi
+
+if [[ -z "$ID" ]]; then
+    if [[ $R -lt 5 ]]; then
+        error "Could not extract document ID (required for R<5)"
+    fi
+    ID=""
+    ID_LEN=0
+else
+    ID_LEN=$((${#ID} / 2))
+    info "ID: ${ID:0:32}... (length: $ID_LEN bytes)"
+fi
+
+# Format hash for hashcat based on revision
+verbose "Formatting hash for hashcat..."
+
+if [[ $R -ge 5 ]]; then
+    # PDF 1.7 Extension Level 3+ (R=5) or Level 8 (R=6) - AES-256
+    # Mode: 10600
+    # Format: $pdf$V*R*keylen*P*EncryptMetadata*id_len*id*u_len*u*o_len*o*oe_len*oe*ue_len*ue*perms_len*perms
+
+    HASH="\$pdf\$$V*$R*$LENGTH*$P*$EM*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O*$OE_LEN*$OE*$UE_LEN*$UE*$PERMS_LEN*$PERMS"
+    info "Hashcat mode: 10600 (PDF 1.7+ AES-256)"
+
+elif [[ $R -eq 3 || $R -eq 4 ]]; then
+    # PDF 1.4-1.6 (Acrobat 5-8) - RC4-128 or AES-128
+    # Mode: 10500 (RC4-128) or 25400 (AES-128)
+    # Format: $pdf$V*R*keylen*P*EncryptMetadata*id_len*id*u_len*u*o_len*o
+
+    if [[ -z "$ID" ]]; then
+        error "Document ID is required for PDF 1.4-1.6 encryption"
+    fi
+
+    HASH="\$pdf\$$V*$R*$LENGTH*$P*$EM*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O"
+    info "Hashcat mode: 10500 (RC4-128) or 25400 (AES-128)"
+
+elif [[ $R -eq 2 ]]; then
+    # PDF 1.1-1.3 (Acrobat 2-4) - RC4-40
+    # Mode: 10400
+    # Format: $pdf$V*R*keylen*P*EncryptMetadata*id_len*id*u_len*u*o_len*o
+
+    if [[ -z "$ID" ]]; then
+        error "Document ID is required for PDF 1.1-1.3 encryption"
+    fi
+
+    HASH="\$pdf\$$V*$R*$LENGTH*$P*1*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O"
+    info "Hashcat mode: 10400 (RC4-40)"
+
+else
+    error "Unsupported encryption revision R=$R"
+fi
+
+# Output the hash
+echo -e "$HASH"
+
+verbose "Hash extraction complete!"
+
+exit 0
