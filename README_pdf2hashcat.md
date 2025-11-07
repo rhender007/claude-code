@@ -14,7 +14,8 @@ A pure Bash tool that automatically cracks encrypted PDFs, removes the password,
   - PDF 1.7 Extension Level 8 (Acrobat XI+) - AES-256 bit encryption
 - **Complete workflow** - Extracts hash, cracks password, decrypts PDF, and opens it
 - **Auto-detects rockyou.txt** - No need to specify wordlist path
-- **Auto-selects hashcat mode** - Detects encryption type automatically
+- **Auto-selects hashcat mode** - Detects encryption type automatically with fallback
+- **Smart mode fallback** - Tries RC4-128 first, auto-retries with AES-128 if needed
 - **Auto-decrypts PDF** - Removes password using qpdf or pdftk
 - **Auto-opens result** - Opens the decrypted PDF automatically
 - **Lightweight** - Uses only standard Unix/Linux tools (grep, awk, xxd)
@@ -112,6 +113,7 @@ The script provides a complete automated workflow:
 
 **Step 2: Crack Password**
 - Auto-detects correct hashcat mode (10400, 10500, 10600, or 25400)
+- For PDF 1.4-1.6: tries RC4-128 (mode 10500) first, automatically falls back to AES-128 (mode 25400) if needed
 - Finds rockyou.txt automatically
 - Runs hashcat with optimal settings
 
@@ -154,13 +156,15 @@ hashcat -m 10600 hash.txt wordlist.txt
 
 ## Hashcat Mode Reference
 
-| Mode  | Description |
-|-------|-------------|
-| 10400 | PDF 1.1-1.3 (Acrobat 2-4), RC4-40 |
-| 10500 | PDF 1.4-1.6 (Acrobat 5-8), RC4-128 |
-| 10600 | PDF 1.7 Level 3-8 (Acrobat 9+), AES-256 |
-| 10700 | PDF 1.4-1.6 (Acrobat 5-8), RC4-128 (user password) |
-| 25400 | PDF 1.4-1.6 (Acrobat 5-8), AES-128 |
+| Mode  | Description | Auto-Selected |
+|-------|-------------|---------------|
+| 10400 | PDF 1.1-1.3 (Acrobat 2-4), RC4-40 | R=2 |
+| 10500 | PDF 1.4-1.6 (Acrobat 5-8), RC4-128 | R=3/4 (tried first) |
+| 25400 | PDF 1.4-1.6 (Acrobat 5-8), AES-128 | R=3/4 (auto-fallback) |
+| 10600 | PDF 1.7 Level 3-8 (Acrobat 9+), AES-256 | R=5/6 |
+| 10700 | PDF 1.4-1.6 (Acrobat 5-8), RC4-128 (user password) | (not used) |
+
+**Note:** For PDF 1.4-1.6 (R=3/4), the script intelligently tries mode 10500 first. If no password is found, it automatically retries with mode 25400. This covers both RC4-128 and AES-128 encryption without manual intervention.
 
 ## How It Works
 
@@ -235,7 +239,7 @@ hashcat -m 10600 hash.txt huge_wordlist.txt
 ### Password not found
 - Try a larger wordlist: `./pdf2hashcat -w /path/to/bigger.txt file.pdf`
 - Try different attack modes (brute force, mask attack, combinator)
-- For R=3/4, the script auto-tries mode 10500; manually try 25400 if needed
+- For PDF 1.4-1.6, the script automatically tries both RC4-128 and AES-128 modes
 
 ### PDF doesn't open automatically
 - Script still saves decrypted PDF as `filename_decrypted.pdf`

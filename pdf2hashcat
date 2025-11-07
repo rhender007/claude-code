@@ -408,6 +408,7 @@ fi
 verbose "Formatting hash for hashcat..."
 
 HASHCAT_MODE=""
+HASHCAT_MODE_FALLBACK=""
 
 if [[ $R -ge 5 ]]; then
     # PDF 1.7 Extension Level 3+ (R=5) or Level 8 (R=6) - AES-256
@@ -429,10 +430,8 @@ elif [[ $R -eq 3 || $R -eq 4 ]]; then
 
     HASH="\$pdf\$$V*$R*$LENGTH*$P*$EM*$ID_LEN*$ID*$U_LEN*$U*$O_LEN*$O"
     HASHCAT_MODE="10500"
-    info "Hashcat mode: 10500 (RC4-128) or 25400 (AES-128)"
-    if [[ $CRACK_MODE -eq 1 ]]; then
-        info "Note: Trying mode 10500 first. If it fails, try mode 25400 for AES-128"
-    fi
+    HASHCAT_MODE_FALLBACK="25400"
+    info "Hashcat mode: 10500 (RC4-128) with auto-fallback to 25400 (AES-128)"
 
 elif [[ $R -eq 2 ]]; then
     # PDF 1.1-1.3 (Acrobat 2-4) - RC4-40
@@ -509,6 +508,33 @@ verbose "Running: $HASHCAT_CMD"
 eval $HASHCAT_CMD
 
 HASHCAT_EXIT=$?
+
+# Check if we need to try fallback mode for R=3/4
+if [[ $HASHCAT_EXIT -eq 1 && -n "$HASHCAT_MODE_FALLBACK" ]]; then
+    echo "" >&2
+    echo -e "${YELLOW}Mode $HASHCAT_MODE failed. Trying fallback mode $HASHCAT_MODE_FALLBACK...${NC}" >&2
+    echo -e "${CYAN}================================================${NC}" >&2
+
+    # Build new command with fallback mode
+    HASHCAT_MODE="$HASHCAT_MODE_FALLBACK"
+    HASHCAT_CMD="hashcat -m $HASHCAT_MODE"
+
+    if [[ -n "$HASHCAT_ARGS" ]]; then
+        HASHCAT_CMD="$HASHCAT_CMD $HASHCAT_ARGS"
+    fi
+
+    HASHCAT_CMD="$HASHCAT_CMD $HASH_FILE"
+
+    if [[ "$WORDLIST" != "-" ]]; then
+        HASHCAT_CMD="$HASHCAT_CMD $WORDLIST"
+    fi
+
+    verbose "Running: $HASHCAT_CMD"
+
+    # Run hashcat with fallback mode
+    eval $HASHCAT_CMD
+    HASHCAT_EXIT=$?
+fi
 
 echo "" >&2
 echo -e "${CYAN}================================================${NC}" >&2
